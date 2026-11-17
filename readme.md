@@ -164,6 +164,7 @@ Each sensor's attributes contain the top N items (configurable, default 10) sort
 | **`rohlikcz.search_and_add_to_cart`** | Search for a product by name and add it to your cart in one step |
 | **`rohlikcz.get_shopping_list`** | Retrieve products from a saved Rohlík.cz shopping list by its ID |
 | **`rohlikcz.get_cart_content`** | Get the current contents of your shopping cart, with an `image` URL per product when available |
+| **`rohlikcz.get_product`** | Name, price, stock and picture of one product by its ID (also returns the raw product detail) |
 | **`rohlikcz.update_data`** | Force an immediate full data refresh from Rohlík.cz |
 | **`rohlikcz.refresh_slots`** | Cheaply refresh only the delivery-slot data with a single request — light enough to poll every few seconds to catch express availability |
 | **`rohlikcz.update_delivery_times`** | Cheaply refresh only the delivery-time announcement with a single request — light enough to poll every minute to track the shifting delivery ETA |

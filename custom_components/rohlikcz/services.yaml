@@ -65,6 +65,27 @@ search_product:
       selector:
         boolean:
 
+get_product:
+  name: Get product
+  description: Name, price, stock and picture of one product by its ID
+  fields:
+    config_entry_id:
+      name: Account
+      description: The Rohlik account to use
+      required: true
+      selector:
+        config_entry:
+          integration: rohlikcz
+    product_id:
+      name: Product ID
+      description: The product ID (as in the shop's product link)
+      required: true
+      example: 1234
+      selector:
+        number:
+          min: 1
+          mode: box
+
 get_shopping_list:
   name: Get shopping list
   description: Retrieve a shopping list by its ID

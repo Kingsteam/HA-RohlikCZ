@@ -16,7 +16,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
-from rohlik_api import InvalidCredentialsError, RohlikAPI, RohlikAPIError, Site
+from rohlik_api import InvalidCredentialsError, RohlikAPI, RohlikAPIError, Site, cdn_url_for, image_url
 
 from .const import DOMAIN, get_site
 from .utils import get_earliest_order
@@ -911,6 +911,29 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
     async def search_product(self, product_name: str, limit: int = 10, favourite: bool = False):
         """Search for a product by name. Returns a SearchResults model (or None)."""
         return await self._client.products.search(product_name, limit, favourite)
+
+    async def get_product(self, product_id: int) -> dict[str, Any]:
+        """Name, price, stock and picture of one product, by ID.
+
+        Name, price and stock come from the product card. The picture comes
+        from ``imgPath`` of the product detail, if the shop sends it. The raw
+        detail is returned as well, so the picture can be found there if it
+        sits under another key.
+        """
+        cards = await self._client.products.get_cards([product_id])
+        detail = await self._client.products.get_detail(product_id)
+        card = cards[0] if cards else None
+        detail = detail if isinstance(detail, dict) else {}
+        return {
+            "product_id": product_id,
+            "found": card is not None or bool(detail),
+            "name": card.name if card else detail.get("name"),
+            "price": card.price if card else None,
+            "currency": card.currency if card else None,
+            "in_stock": card.in_stock if card else None,
+            "image": image_url(detail.get("imgPath"), cdn_url_for(self._site.base_url)),
+            "detail": detail,
+        }
 
     async def get_shopping_list(self, shopping_list_id: str):
         """Get a shopping list by ID. Returns a ShoppingList model."""

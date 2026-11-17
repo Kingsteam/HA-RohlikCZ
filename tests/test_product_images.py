@@ -230,3 +230,47 @@ async def test_unexpected_error_does_not_fail_the_refresh(hass: HomeAssistant) -
 
     assert entry.runtime_data.last_update_success is True
     assert _ordered_state(hass).attributes["items"] == []
+
+
+async def test_get_product_service(hass: HomeAssistant) -> None:
+    """get_product combines the product card with the detail's picture."""
+    from rohlik_api import ProductCard
+
+    entry = await _setup(hass, sample_api_data(), AsyncMock(return_value=[]))
+    card = ProductCard(id=2001, name="Testbrot", brand=None, amount="500 g", unit="ks",
+                       price=2.5, original_price=2.5, unit_price=5.0, currency="CZK")
+    detail = {"productId": 2001, "imgPath": "/images/grocery/products/2001/2001-1.jpg"}
+    with (
+        patch("rohlik_api.services.products.ProductService.get_cards",
+              new=AsyncMock(return_value=[card])),
+        patch("rohlik_api.services.products.ProductService.get_detail",
+              new=AsyncMock(return_value=detail)),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN, "get_product", {"config_entry_id": entry.entry_id, "product_id": 2001},
+            blocking=True, return_response=True,
+        )
+    assert response["found"] is True
+    assert response["name"] == "Testbrot"
+    assert response["price"] == 2.5
+    assert response["in_stock"] is True
+    # Relative imgPath is completed with the shop's CDN (Rohlík.cz for this entry).
+    assert response["image"] == "https://cdn.rohlik.cz/images/grocery/products/2001/2001-1.jpg"
+    assert response["detail"] == detail
+
+
+async def test_get_product_unknown(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, sample_api_data(), AsyncMock(return_value=[]))
+    with (
+        patch("rohlik_api.services.products.ProductService.get_cards",
+              new=AsyncMock(return_value=[])),
+        patch("rohlik_api.services.products.ProductService.get_detail",
+              new=AsyncMock(return_value=None)),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN, "get_product", {"config_entry_id": entry.entry_id, "product_id": 9},
+            blocking=True, return_response=True,
+        )
+    assert response["found"] is False
+    assert response["image"] is None
+    assert response["name"] is None
