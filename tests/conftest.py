@@ -12,14 +12,22 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture(autouse=True)
 def no_order_item_requests():
-    """Stub the upcoming-order item lookup so no test reaches the network.
+    """Stub the upcoming-order item and product-detail lookups so no test
+    reaches the network.
 
-    Tests that check the item list patch ``OrderService.get_items`` themselves.
+    Tests that check them patch ``OrderService.get_items`` or
+    ``ProductService.get_detail`` themselves.
     """
     from unittest.mock import AsyncMock, patch
 
-    with patch(
-        "rohlik_api.services.orders.OrderService.get_items",
-        new=AsyncMock(return_value=[]),
+    with (
+        patch(
+            "rohlik_api.services.orders.OrderService.get_items",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "rohlik_api.services.products.ProductService.get_detail",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         yield
