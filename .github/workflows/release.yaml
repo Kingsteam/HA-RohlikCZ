@@ -2,14 +2,15 @@ name: Release
 
 # Builds rohlikcz.zip (the file HACS downloads, see hacs.json) and attaches it
 # to the GitHub release. Runs when a release is published; it can also be run
-# by hand for an existing tag, for example to rebuild a missing ZIP.
+# by hand: for an existing tag it rebuilds the ZIP, for a new tag it creates
+# the tag and release at the commit the run was started on.
 on:
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to build and attach the ZIP to (e.g. v1.0.0)"
+        description: "Release tag to build and attach the ZIP to (e.g. v1.0.0); created if it does not exist"
         required: true
 
 permissions:
@@ -23,7 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check out the tag if it exists
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git checkout -q "$TAG"
+          else
+            echo "Tag $TAG does not exist yet; it will be created at $(git rev-parse HEAD)."
+          fi
 
       - name: Check manifest version matches tag
         run: |
@@ -54,6 +63,15 @@ jobs:
           find . -name __pycache__ -type d -prune -exec rm -rf {} +
           zip -r "$GITHUB_WORKSPACE/rohlikcz.zip" .
           unzip -l "$GITHUB_WORKSPACE/rohlikcz.zip"
+
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes
+          fi
 
       - name: Attach ZIP to release
         env:
