@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/dvejsada/HA-RohlikCZ/issues",
   "requirements": ["rohlik-api@git+https://github.com/Kingsteam/rohlik_api_python.git@479729f071cb38615524ec5940d566e1c11be3c0"],
-  "version": "1.2.0"
+  "version": "1.2.1"
 }

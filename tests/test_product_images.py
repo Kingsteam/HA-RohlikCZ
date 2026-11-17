@@ -274,3 +274,90 @@ async def test_get_product_unknown(hass: HomeAssistant) -> None:
     assert response["found"] is False
     assert response["image"] is None
     assert response["name"] is None
+
+
+# Shape seen live on Gurkerl.at: the product detail lists full picture URLs.
+DETAIL_IMG = "https://cdn.example.test/images/grocery/products/3001/3001-1.jpg"
+
+
+async def test_get_product_reads_images_list(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, sample_api_data(), AsyncMock(return_value=[]))
+    detail = {"productId": 3001, "images": [None, DETAIL_IMG, "https://cdn.example.test/b.png"]}
+    with (
+        patch("rohlik_api.services.products.ProductService.get_cards",
+              new=AsyncMock(return_value=[])),
+        patch("rohlik_api.services.products.ProductService.get_detail",
+              new=AsyncMock(return_value=detail)),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN, "get_product", {"config_entry_id": entry.entry_id, "product_id": 3001},
+            blocking=True, return_response=True,
+        )
+    assert response["image"] == DETAIL_IMG
+
+
+async def test_get_product_uppercase_extension(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, sample_api_data(), AsyncMock(return_value=[]))
+    url = "https://cdn.example.test/images/grocery/products/3002/3002-1.JPEG"
+    with (
+        patch("rohlik_api.services.products.ProductService.get_cards",
+              new=AsyncMock(return_value=[])),
+        patch("rohlik_api.services.products.ProductService.get_detail",
+              new=AsyncMock(return_value={"images": [url]})),
+    ):
+        response = await hass.services.async_call(
+            DOMAIN, "get_product", {"config_entry_id": entry.entry_id, "product_id": 3002},
+            blocking=True, return_response=True,
+        )
+    assert response["image"] == url
+
+
+def _order_items_without_pictures() -> list[OrderItem]:
+    return [
+        OrderItem(id=2001, name="Testbrot", quantity=1, price=2.5, unit_price=2.5,
+                  textual_amount="500 g", currency="EUR", image=IMG_A),
+        OrderItem(id=2002, name="Testmilch", quantity=2, price=3.0, unit_price=1.5,
+                  textual_amount="1 l", currency="EUR", image=None),  # from itemImages
+        OrderItem(id=3001, name="Testkäse", quantity=1, price=4.0, unit_price=4.0,
+                  textual_amount="200 g", currency="EUR", image=None),  # from detail
+    ]
+
+
+async def test_order_items_missing_pictures_come_from_product_detail(hass: HomeAssistant) -> None:
+    data = sample_api_data()
+    data["next_order"] = [_upcoming_order(items_count=3)]
+    get_detail = AsyncMock(return_value={"images": [DETAIL_IMG]})
+    with patch("rohlik_api.services.products.ProductService.get_detail", new=get_detail):
+        entry = await _setup(hass, data, AsyncMock(return_value=_order_items_without_pictures()))
+
+    images = {row["id"]: row["image"] for row in _ordered_state(hass).attributes["items"]}
+    assert images == {2001: IMG_A, 2002: IMG_B, 3001: DETAIL_IMG}
+    # Only the product without any picture was looked up.
+    get_detail.assert_awaited_once_with(3001)
+
+    # The order changes: the picture of 3001 comes from the cache, no new request.
+    account = entry.runtime_data
+    changed = sample_api_data()
+    changed["next_order"] = [_upcoming_order(items_count=3, total=9.9)]
+    with (
+        patch("rohlik_api.services.orders.OrderService.get_items",
+              new=AsyncMock(return_value=_order_items_without_pictures())),
+        patch("rohlik_api.services.products.ProductService.get_detail", new=get_detail),
+    ):
+        await account._update_next_order_items(changed)
+    assert get_detail.await_count == 1
+    assert account.next_order_items[2]["image"] == DETAIL_IMG
+
+
+async def test_failed_picture_lookup_leaves_image_empty(hass: HomeAssistant) -> None:
+    data = sample_api_data()
+    data["next_order"] = [_upcoming_order(items_count=3)]
+    get_detail = AsyncMock(side_effect=RuntimeError("boom"))
+    with patch("rohlik_api.services.products.ProductService.get_detail", new=get_detail):
+        entry = await _setup(hass, data, AsyncMock(return_value=_order_items_without_pictures()))
+
+    assert entry.runtime_data.last_update_success is True
+    rows = _ordered_state(hass).attributes["items"]
+    assert [r["image"] for r in rows] == [IMG_A, IMG_B, None]
+    # A failure is not cached, so the next order change tries again.
+    assert "3001" not in entry.runtime_data._product_images

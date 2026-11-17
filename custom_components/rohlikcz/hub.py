@@ -425,6 +425,9 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         # request only runs when the order is new or has changed.
         self._next_order_items: list[dict[str, Any]] = []
         self._next_order_items_key: tuple | None = None
+        # Product ID -> picture URL from the product detail, for order lines
+        # without a picture. Pictures rarely change, so each ID is fetched once.
+        self._product_images: dict[str, str] = {}
 
     @property
     def analytics_enabled(self) -> bool:
@@ -575,7 +578,8 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         pictures (``itemImages``), not the item names, so the items come from
         the order detail. They are fetched again only when the order ID, its
         item count or its total changes. A picture missing from the detail is
-        filled in from ``itemImages`` by product ID.
+        filled in from ``itemImages`` by product ID, and failing that from the
+        product detail (cached per product ID).
         """
         order = get_earliest_order(data.get("next_order") or [])
         if not order or order.get("id") is None:
@@ -607,17 +611,23 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
             for entry in order.get("itemImages") or []
             if isinstance(entry, dict) and entry.get("image")
         }
-        self._next_order_items = [
-            {
-                "id": item.id,
-                "name": item.name,
-                "quantity": item.quantity,
-                "price": item.price,
-                "textual_amount": item.textual_amount,
-                "image": item.image or images.get(str(item.id)),
-            }
-            for item in items
-        ]
+        rows = []
+        for item in items:
+            image = item.image or images.get(str(item.id))
+            if not image and item.id is not None:
+                # Not in itemImages (max. 6): ask the product detail, once per ID.
+                image = await self._product_image(item.id)
+            rows.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "quantity": item.quantity,
+                    "price": item.price,
+                    "textual_amount": item.textual_amount,
+                    "image": image,
+                }
+            )
+        self._next_order_items = rows
         self._next_order_items_key = key
 
     async def async_update(self) -> None:
@@ -912,13 +922,44 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         """Search for a product by name. Returns a SearchResults model (or None)."""
         return await self._client.products.search(product_name, limit, favourite)
 
+    def _image_from_detail(self, detail: dict | None) -> str | None:
+        """Picture URL from a product detail (``/api/v1/products/{id}``).
+
+        The detail carries ``images``, a list of full URLs (seen on Gurkerl.at);
+        the first one is used. ``imgPath`` is a fallback for other shapes.
+        """
+        if not isinstance(detail, dict):
+            return None
+        cdn = cdn_url_for(self._site.base_url)
+        images = detail.get("images")
+        if isinstance(images, list):
+            for candidate in images:
+                url = image_url(candidate, cdn)
+                if url:
+                    return url
+        return image_url(detail.get("imgPath"), cdn)
+
+    async def _product_image(self, product_id: Any) -> str | None:
+        """Picture of one product from its detail, cached per product ID."""
+        key = str(product_id)
+        if key in self._product_images:
+            return self._product_images[key]
+        try:
+            detail = await self._client.products.get_detail(int(product_id))
+        except Exception as err:  # noqa: BLE001 - optional extra, must never fail the refresh
+            _LOGGER.debug("Failed to fetch picture of product %s: %s", product_id, err)
+            return None
+        url = self._image_from_detail(detail)
+        if url:
+            self._product_images[key] = url
+        return url
+
     async def get_product(self, product_id: int) -> dict[str, Any]:
         """Name, price, stock and picture of one product, by ID.
 
-        Name, price and stock come from the product card. The picture comes
-        from ``imgPath`` of the product detail, if the shop sends it. The raw
-        detail is returned as well, so the picture can be found there if it
-        sits under another key.
+        Name, price and stock come from the product card, the picture from the
+        product detail (``images``, see ``_image_from_detail``). The raw detail
+        is returned as well.
         """
         cards = await self._client.products.get_cards([product_id])
         detail = await self._client.products.get_detail(product_id)
@@ -931,7 +972,7 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
             "price": card.price if card else None,
             "currency": card.currency if card else None,
             "in_stock": card.in_stock if card else None,
-            "image": image_url(detail.get("imgPath"), cdn_url_for(self._site.base_url)),
+            "image": self._image_from_detail(detail),
             "detail": detail,
         }
 
