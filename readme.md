@@ -90,7 +90,7 @@ Enabling analytics triggers a one-time download of your full order history (this
 |--------|-------------|
 | **Premium Membership** | Active when your premium subscription is valid; premium details available as attributes |
 | **Reusable Bags** | Active when reusable bags are enabled on your account |
-| **Next Order** | Active when you have a scheduled upcoming order; order details as attributes |
+| **Next Order** | Active when you have a scheduled upcoming order; order details as attributes: `order_data` (raw order) and `items` (name, quantity, price, textual amount and picture URL of every line) |
 | **Timeslot Reservation** | Active when you have a reserved delivery timeslot |
 | **Parents Club** | Active when you are a member of the Parents Club |
 | **Express Available** | Active when express delivery is currently available in your area |
@@ -160,10 +160,11 @@ Each sensor's attributes contain the top N items (configurable, default 10) sort
 | Action | Description |
 |--------|-------------|
 | **`rohlikcz.add_to_cart`** | Add a product to your cart by product ID and quantity |
-| **`rohlikcz.search_product`** | Search for products available on Rohlík.cz by name |
+| **`rohlikcz.search_product`** | Search for products available on Rohlík.cz by name; every result includes an `image` URL when the shop sends one |
 | **`rohlikcz.search_and_add_to_cart`** | Search for a product by name and add it to your cart in one step |
 | **`rohlikcz.get_shopping_list`** | Retrieve products from a saved Rohlík.cz shopping list by its ID |
-| **`rohlikcz.get_cart_content`** | Get the current contents of your shopping cart |
+| **`rohlikcz.get_cart_content`** | Get the current contents of your shopping cart, with an `image` URL per product when available |
+| **`rohlikcz.get_product`** | Name, price, stock and picture of one product by its ID (also returns the raw product detail) |
 | **`rohlikcz.update_data`** | Force an immediate full data refresh from Rohlík.cz |
 | **`rohlikcz.refresh_slots`** | Cheaply refresh only the delivery-slot data with a single request — light enough to poll every few seconds to catch express availability |
 | **`rohlikcz.update_delivery_times`** | Cheaply refresh only the delivery-time announcement with a single request — light enough to poll every minute to track the shifting delivery ETA |

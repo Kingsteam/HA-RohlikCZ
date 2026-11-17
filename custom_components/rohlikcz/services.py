@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, ATTR_CONFIG_ENTRY_ID, ATTR_PRODUCT_ID, ATTR_QUANTITY, ATTR_PRODUCT_NAME, \
     ATTR_SHOPPING_LIST_ID, ATTR_LIMIT, ATTR_FAVOURITE_ONLY, SERVICE_ADD_TO_CART, SERVICE_SEARCH_PRODUCT, SERVICE_GET_SHOPPING_LIST, \
     SERVICE_GET_CART_CONTENT, SERVICE_SEARCH_AND_ADD_PRODUCT, SERVICE_UPDATE_DATA, SERVICE_FETCH_ORDER_HISTORY, SERVICE_ENRICH_ORDERS, \
-    SERVICE_REFRESH_SLOTS, SERVICE_UPDATE_DELIVERY_TIMES
+    SERVICE_REFRESH_SLOTS, SERVICE_UPDATE_DELIVERY_TIMES, SERVICE_GET_PRODUCT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,6 +103,15 @@ def register_services(hass: HomeAssistant) -> None:
         except Exception as err:
             _LOGGER.error(f"Failed to get shopping list: {err}")
             raise HomeAssistantError(f"Failed to get shopping list: {err}")
+
+    async def async_get_product_service(call: ServiceCall) -> dict[str, Any]:
+        """Get name, price, stock and picture of one product."""
+        account = _get_account(hass, call.data[ATTR_CONFIG_ENTRY_ID])
+        try:
+            return await account.get_product(call.data[ATTR_PRODUCT_ID])
+        except Exception as err:
+            _LOGGER.error(f"Failed to get product: {err}")
+            raise HomeAssistantError(f"Failed to get product: {err}")
 
     async def async_get_cart_service(call: ServiceCall) -> dict[str, Any]:
         """Get shopping cart content."""
@@ -219,6 +228,17 @@ def register_services(hass: HomeAssistant) -> None:
             vol.Required(ATTR_SHOPPING_LIST_ID): cv.string,
         }),
         supports_response=True
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_PRODUCT,
+        async_get_product_service,
+        schema=vol.Schema({
+            vol.Required(ATTR_CONFIG_ENTRY_ID): cv.string,
+            vol.Required(ATTR_PRODUCT_ID): cv.positive_int,
+        }),
+        supports_response=SupportsResponse.ONLY
     )
 
     hass.services.async_register(

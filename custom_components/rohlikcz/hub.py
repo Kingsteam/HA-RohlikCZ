@@ -16,9 +16,10 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
-from rohlik_api import InvalidCredentialsError, RohlikAPI, RohlikAPIError, Site
+from rohlik_api import InvalidCredentialsError, RohlikAPI, RohlikAPIError, Site, cdn_url_for, image_url
 
 from .const import DOMAIN, get_site
+from .utils import get_earliest_order
 
 #: How often the integration refreshes data from the Rohlik API.
 UPDATE_INTERVAL = timedelta(seconds=600)
@@ -419,6 +420,11 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         self._analytics: list[str] = analytics or []
         self._top_n: int = top_n
         self._hide_discontinued: bool = hide_discontinued
+        # Line items of the earliest upcoming order (see next_order_items) and
+        # the (order id, item count, total) they were fetched for, so the extra
+        # request only runs when the order is new or has changed.
+        self._next_order_items: list[dict[str, Any]] = []
+        self._next_order_items_key: tuple | None = None
 
     @property
     def analytics_enabled(self) -> bool:
@@ -476,6 +482,11 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
     @property
     def is_ordered(self) -> bool:
         return len(self.data.get('next_order', [])) > 0
+
+    @property
+    def next_order_items(self) -> list[dict[str, Any]]:
+        """Line items (name, quantity, price, image …) of the earliest upcoming order."""
+        return self._next_order_items
 
     @property
     def order_store(self) -> OrderStore | None:
@@ -536,6 +547,8 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
 
         self._last_refresh = datetime.now(self._timezone)
 
+        await self._update_next_order_items(data)
+
         # Initialize order store on first update (only if analytics enabled)
         if self._analytics and not self._order_store and data.get("login"):
             user_id = str(data["login"]["data"]["user"]["id"])
@@ -554,6 +567,58 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
                 )
 
         return data
+
+    async def _update_next_order_items(self, data: dict) -> None:
+        """Fetch the line items of the earliest upcoming order when it changed.
+
+        The upcoming-orders payload only carries item count and up to six
+        pictures (``itemImages``), not the item names, so the items come from
+        the order detail. They are fetched again only when the order ID, its
+        item count or its total changes. A picture missing from the detail is
+        filled in from ``itemImages`` by product ID.
+        """
+        order = get_earliest_order(data.get("next_order") or [])
+        if not order or order.get("id") is None:
+            self._next_order_items = []
+            self._next_order_items_key = None
+            return
+
+        total = ((order.get("priceComposition") or {}).get("total") or {}).get("amount")
+        key = (str(order["id"]), order.get("itemsCount"), total)
+        if key == self._next_order_items_key:
+            return
+
+        try:
+            items = await self._client.orders.get_items(int(order["id"]))
+        except Exception as err:  # noqa: BLE001 - optional extra, must never fail the refresh
+            _LOGGER.warning("Failed to fetch items of upcoming order %s: %s", order.get("id"), err)
+            items = None
+
+        if items is None:
+            # Keep the previous list for the same order and retry next refresh;
+            # drop it if it belonged to another order.
+            if self._next_order_items_key and self._next_order_items_key[0] != key[0]:
+                self._next_order_items = []
+                self._next_order_items_key = None
+            return
+
+        images = {
+            str(entry.get("productId")): entry.get("image")
+            for entry in order.get("itemImages") or []
+            if isinstance(entry, dict) and entry.get("image")
+        }
+        self._next_order_items = [
+            {
+                "id": item.id,
+                "name": item.name,
+                "quantity": item.quantity,
+                "price": item.price,
+                "textual_amount": item.textual_amount,
+                "image": item.image or images.get(str(item.id)),
+            }
+            for item in items
+        ]
+        self._next_order_items_key = key
 
     async def async_update(self) -> None:
         """Force an immediate data refresh (used by services and after cart changes)."""
@@ -846,6 +911,29 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
     async def search_product(self, product_name: str, limit: int = 10, favourite: bool = False):
         """Search for a product by name. Returns a SearchResults model (or None)."""
         return await self._client.products.search(product_name, limit, favourite)
+
+    async def get_product(self, product_id: int) -> dict[str, Any]:
+        """Name, price, stock and picture of one product, by ID.
+
+        Name, price and stock come from the product card. The picture comes
+        from ``imgPath`` of the product detail, if the shop sends it. The raw
+        detail is returned as well, so the picture can be found there if it
+        sits under another key.
+        """
+        cards = await self._client.products.get_cards([product_id])
+        detail = await self._client.products.get_detail(product_id)
+        card = cards[0] if cards else None
+        detail = detail if isinstance(detail, dict) else {}
+        return {
+            "product_id": product_id,
+            "found": card is not None or bool(detail),
+            "name": card.name if card else detail.get("name"),
+            "price": card.price if card else None,
+            "currency": card.currency if card else None,
+            "in_stock": card.in_stock if card else None,
+            "image": image_url(detail.get("imgPath"), cdn_url_for(self._site.base_url)),
+            "detail": detail,
+        }
 
     async def get_shopping_list(self, shopping_list_id: str):
         """Get a shopping list by ID. Returns a ShoppingList model."""
