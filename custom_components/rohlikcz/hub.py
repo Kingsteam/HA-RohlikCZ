@@ -16,13 +16,24 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
-from rohlik_api import InvalidCredentialsError, RohlikAPI, RohlikAPIError, Site, cdn_url_for, image_url
+from rohlik_api import (
+    DeliverySlot,
+    InvalidCredentialsError,
+    RohlikAPI,
+    RohlikAPIError,
+    Site,
+    cdn_url_for,
+    image_url,
+)
 
 from .const import DOMAIN, get_site
 from .utils import get_earliest_order
 
 #: How often the integration refreshes data from the Rohlik API.
 UPDATE_INTERVAL = timedelta(seconds=600)
+#: The favourites list changes rarely and costs one request per 50 products,
+#: so it is refreshed far less often than the rest of the data.
+FAVOURITES_INTERVAL = timedelta(hours=1)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -428,6 +439,10 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         # Product ID -> picture URL from the product detail, for order lines
         # without a picture. Pictures rarely change, so each ID is fetched once.
         self._product_images: dict[str, str] = {}
+        # The user's favourite products (see favourites) and when they were
+        # last fetched; None until the first successful fetch.
+        self._favourites: list[dict[str, Any]] | None = None
+        self._favourites_fetched: datetime | None = None
 
     @property
     def analytics_enabled(self) -> bool:
@@ -551,6 +566,7 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
         self._last_refresh = datetime.now(self._timezone)
 
         await self._update_next_order_items(data)
+        await self._update_favourites()
 
         # Initialize order store on first update (only if analytics enabled)
         if self._analytics and not self._order_store and data.get("login"):
@@ -629,6 +645,89 @@ class RohlikAccount(DataUpdateCoordinator[dict]):
             )
         self._next_order_items = rows
         self._next_order_items_key = key
+
+    @property
+    def favourites(self) -> list[dict[str, Any]] | None:
+        """The user's favourite products, or None if not fetched (yet).
+
+        Each entry has ``id``, ``name``, ``amount``, ``price``, ``currency``,
+        ``in_stock``, ``on_sale`` and ``image``.
+        """
+        return self._favourites
+
+    @property
+    def favourites_fetched(self) -> datetime | None:
+        """When the favourites were last fetched successfully."""
+        return self._favourites_fetched
+
+    async def _update_favourites(self, force: bool = False) -> bool:
+        """Fetch the favourites when due (hourly) or when forced.
+
+        Optional extra: a failure is logged and keeps the previous list, it
+        never fails the regular refresh. Returns True when a new list arrived.
+        """
+        now = datetime.now(self._timezone)
+        if (
+            not force
+            and self._favourites_fetched is not None
+            and now - self._favourites_fetched < FAVOURITES_INTERVAL
+        ):
+            return False
+        try:
+            cards = await self._client.products.get_favourites()
+        except Exception as err:  # noqa: BLE001 - optional extra, must never fail the refresh
+            _LOGGER.warning("Failed to fetch favourite products: %s", err)
+            cards = None
+        if cards is None:
+            # Retry at the next refresh rather than waiting another hour.
+            return False
+        self._favourites = [
+            {
+                "id": card.id,
+                "name": card.name,
+                "amount": card.amount,
+                "price": card.price,
+                "currency": card.currency,
+                "in_stock": card.in_stock,
+                "on_sale": card.on_sale,
+                "image": card.image,
+            }
+            for card in cards
+        ]
+        self._favourites_fetched = now
+        return True
+
+    async def refresh_favourites(self) -> list[dict[str, Any]] | None:
+        """Fetch the favourites now and notify entities (service call)."""
+        if await self._update_favourites(force=True):
+            self.async_update_listeners()
+        return self._favourites
+
+    @property
+    def delivery_slots(self) -> list[dict[str, Any]]:
+        """Every delivery window of the coming days, sorted by start.
+
+        Parsed from the timeslots data the regular refresh already fetches
+        (no extra request). Compact entries for the dashboard card: ``id``,
+        ``date``, ``day``, ``since``, ``till``, ``minutes``, ``free``
+        (percent, 0 = booked out), ``price``, ``premium`` and ``eco``.
+        """
+        payload = (self.data or {}).get("next_delivery_slot")
+        return [
+            {
+                "id": slot.id,
+                "date": slot.date,
+                "day": slot.day_label,
+                "since": slot.since,
+                "till": slot.till,
+                "minutes": slot.minutes,
+                "free": slot.free_percent,
+                "price": slot.price,
+                "premium": slot.premium,
+                "eco": slot.eco,
+            }
+            for slot in DeliverySlot.list_from_api(payload)
+        ]
 
     async def async_update(self) -> None:
         """Force an immediate data refresh (used by services and after cart changes)."""

@@ -12,7 +12,8 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, ATTR_CONFIG_ENTRY_ID, ATTR_PRODUCT_ID, ATTR_QUANTITY, ATTR_PRODUCT_NAME, \
     ATTR_SHOPPING_LIST_ID, ATTR_LIMIT, ATTR_FAVOURITE_ONLY, SERVICE_ADD_TO_CART, SERVICE_SEARCH_PRODUCT, SERVICE_GET_SHOPPING_LIST, \
     SERVICE_GET_CART_CONTENT, SERVICE_SEARCH_AND_ADD_PRODUCT, SERVICE_UPDATE_DATA, SERVICE_FETCH_ORDER_HISTORY, SERVICE_ENRICH_ORDERS, \
-    SERVICE_REFRESH_SLOTS, SERVICE_UPDATE_DELIVERY_TIMES, SERVICE_GET_PRODUCT
+    SERVICE_REFRESH_SLOTS, SERVICE_UPDATE_DELIVERY_TIMES, SERVICE_GET_PRODUCT, SERVICE_GET_FAVOURITES, \
+    SERVICE_GET_DELIVERY_SLOTS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,6 +113,26 @@ def register_services(hass: HomeAssistant) -> None:
         except Exception as err:
             _LOGGER.error(f"Failed to get product: {err}")
             raise HomeAssistantError(f"Failed to get product: {err}")
+
+    async def async_get_favourites_service(call: ServiceCall) -> dict[str, Any]:
+        """Fetch the favourite products now (also refreshes the favourites sensor)."""
+        account = _get_account(hass, call.data[ATTR_CONFIG_ENTRY_ID])
+        try:
+            products = await account.refresh_favourites()
+        except Exception as err:
+            _LOGGER.error(f"Failed to get favourites: {err}")
+            raise HomeAssistantError(f"Failed to get favourites: {err}")
+        if products is None:
+            raise HomeAssistantError("Failed to get favourites")
+        return {"products": products}
+
+    async def async_get_delivery_slots_service(call: ServiceCall) -> dict[str, Any]:
+        """Return every delivery window from the last refresh (no extra request)."""
+        account = _get_account(hass, call.data[ATTR_CONFIG_ENTRY_ID])
+        slots = account.delivery_slots
+        if call.data.get("only_available", False):
+            slots = [slot for slot in slots if slot["free"] > 0]
+        return {"slots": slots}
 
     async def async_get_cart_service(call: ServiceCall) -> dict[str, Any]:
         """Get shopping cart content."""
@@ -237,6 +258,27 @@ def register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema({
             vol.Required(ATTR_CONFIG_ENTRY_ID): cv.string,
             vol.Required(ATTR_PRODUCT_ID): cv.positive_int,
+        }),
+        supports_response=SupportsResponse.ONLY
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_FAVOURITES,
+        async_get_favourites_service,
+        schema=vol.Schema({
+            vol.Required(ATTR_CONFIG_ENTRY_ID): cv.string,
+        }),
+        supports_response=SupportsResponse.ONLY
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_DELIVERY_SLOTS,
+        async_get_delivery_slots_service,
+        schema=vol.Schema({
+            vol.Required(ATTR_CONFIG_ENTRY_ID): cv.string,
+            vol.Optional("only_available", default=False): cv.boolean,
         }),
         supports_response=SupportsResponse.ONLY
     )

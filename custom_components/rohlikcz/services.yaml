@@ -86,6 +86,37 @@ get_product:
           min: 1
           mode: box
 
+get_favourites:
+  name: Get favourites
+  description: Fetch the account's favourite products now (name, amount, price, picture, in stock). Also refreshes the favourites sensor.
+  fields:
+    config_entry_id:
+      name: Account
+      description: The Rohlik account to use
+      required: true
+      selector:
+        config_entry:
+          integration: rohlikcz
+
+get_delivery_slots:
+  name: Get delivery slots
+  description: Every delivery window of the coming days (one-hour and 15-minute) from the last data refresh, with free capacity in percent.
+  fields:
+    config_entry_id:
+      name: Account
+      description: The Rohlik account to use
+      required: true
+      selector:
+        config_entry:
+          integration: rohlikcz
+    only_available:
+      name: Only available
+      description: Leave out windows that are fully booked
+      required: false
+      default: false
+      selector:
+        boolean:
+
 get_shopping_list:
   name: Get shopping list
   description: Retrieve a shopping list by its ID
